@@ -8,23 +8,22 @@ MONGODB_URI = "mongodb://localhost:27017/"
 DB_NAME = "job_listings"
 USERS_COLLECTION = "users"
 JOBS_COLLECTION = "jobs"
+APPLICATIONS_COLLECTION = "applications"  # New collection for job applications
 
 # Connect to MongoDB
 client = MongoClient(MONGODB_URI)
 db = client[DB_NAME]
 users_collection = db[USERS_COLLECTION]
 jobs_collection = db[JOBS_COLLECTION]
-
+applications_collection = db[APPLICATIONS_COLLECTION]
 
 # Helper function: Hash the password using bcrypt
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
-
 # Helper function: Check if the password matches the hashed password
 def check_password(password, hashed_password):
     return bcrypt.checkpw(password.encode('utf-8'), hashed_password)
-
 
 # Initialize session state for login and page navigation
 if 'logged_in' not in st.session_state:
@@ -35,14 +34,14 @@ if 'role' not in st.session_state:
     st.session_state.role = "user"  # Default role is 'user'
 if 'page' not in st.session_state:
     st.session_state.page = "login"  # Default page is the login page
-
+if 'selected_job_id' not in st.session_state:
+    st.session_state.selected_job_id = None
 
 # Function to register a new user
 def register_user(username, password, role="user"):
     hashed_pw = hash_password(password)
     users_collection.insert_one({"username": username, "password": hashed_pw, "role": role})
     st.success("Registration successful! You can now log in.")
-
 
 # Function to authenticate a user
 def authenticate_user(username, password):
@@ -55,7 +54,6 @@ def authenticate_user(username, password):
         st.success(f"Welcome {username}!")
     else:
         st.error("Invalid username or password")
-
 
 # Login Page
 def login_page():
@@ -70,7 +68,6 @@ def login_page():
     st.write("Don't have an account?")
     if st.button("Register"):
         st.session_state.page = "register"
-
 
 # Register Page
 def register_page():
@@ -93,14 +90,12 @@ def register_page():
     if st.button("Back to Login"):
         st.session_state.page = "login"
 
-
 # Logout Function
 def logout():
     st.session_state.logged_in = False
     st.session_state.username = None
     st.session_state.role = "user"
     st.session_state.page = "login"
-
 
 # Job Listings Page (Only accessible if logged in)
 def job_listings_page():
@@ -128,6 +123,11 @@ def job_listings_page():
             if job['logo']:
                 st.image(job['logo'], caption="Company Logo", width=100)
 
+            # Apply for Job button
+            if st.button(f"Apply for {job['title']}", key=f"apply_{job['_id']}"):
+                st.session_state.selected_job_id = job['_id']
+                st.session_state.page = "apply_for_job"
+
             # Delete job button (visible only to the creator or an admin)
             if st.session_state.username == job['created_by'] or st.session_state.role == "admin":
                 if st.button(f"Delete {job['title']}", key=str(job['_id'])):
@@ -148,7 +148,6 @@ def job_listings_page():
     # Logout button
     if st.button("Logout"):
         logout()
-
 
 # Add Job Page
 def add_job_page():
@@ -186,11 +185,49 @@ def add_job_page():
     if st.button("Back to Listings"):
         st.session_state.page = "list_jobs"
 
+# Apply for Job Page
+def apply_for_job_page():
+    st.title("Apply for Job")
+
+    # Get the selected job from MongoDB
+    selected_job = jobs_collection.find_one({"_id": ObjectId(st.session_state.selected_job_id)})
+
+    if selected_job:
+        st.subheader(f"Job Title: {selected_job['title']}")
+
+        # Applicant form
+        with st.form(key='apply_form'):
+            name = st.text_input("Your Name")
+            email = st.text_input("Your Email")
+            resume = st.file_uploader("Upload Your Resume", type=['pdf', 'docx'])
+
+            submit_button = st.form_submit_button(label="Submit Application")
+
+            if submit_button:
+                if name and email and resume:
+                    # Save the application to the database
+                    new_application = {
+                        "job_id": selected_job['_id'],
+                        "job_title": selected_job['title'],
+                        "applicant_name": name,
+                        "applicant_email": email,
+                        "resume": resume.read()  # Store resume file as binary data
+                    }
+                    applications_collection.insert_one(new_application)  # Store in applications collection
+
+                    st.success("Application submitted successfully!")
+                    st.session_state.page = "list_jobs"  # Go back to the job listings page after submission
+                else:
+                    st.error("Please complete all fields.")
+    else:
+        st.error("Job not found.")
+
+    if st.button("Back to Job Listings"):
+        st.session_state.page = "list_jobs"
 
 # Function to delete a job post
 def delete_job(job_id):
     jobs_collection.delete_one({"_id": ObjectId(job_id)})
-
 
 # Page Navigation Logic
 if st.session_state.logged_in:
@@ -198,6 +235,8 @@ if st.session_state.logged_in:
         job_listings_page()
     elif st.session_state.page == "add_job":
         add_job_page()
+    elif st.session_state.page == "apply_for_job":
+        apply_for_job_page()
 else:
     if st.session_state.page == "login":
         login_page()
